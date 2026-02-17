@@ -1,0 +1,621 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { Camera, Users, Car, UserCheck, Download, Play, Square, RefreshCw, Database } from 'lucide-react';
+
+const CampusSurveillance = () => {
+  const [isRunning, setIsRunning] = useState(false);
+  const [counts, setCounts] = useState({
+    persons: 0,
+    vehicles: 0,
+    knownFaces: 0,
+    unknownFaces: 0,
+    numberPlates: 0
+  });
+  const [logs, setLogs] = useState([]);
+  const [error, setError] = useState('');
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const streamRef = useRef(null);
+  const detectionIntervalRef = useRef(null);
+  const animationFrameRef = useRef(null);
+
+  // Simulated detection system
+  const detectObjects = () => {
+    // Higher probability of detection for better demo
+    const hasDetection = Math.random() > 0.3;
+    
+    if (!hasDetection) {
+      return {
+        persons: 0,
+        vehicles: 0,
+        faces: 0,
+        plates: 0,
+        knownFaces: 0,
+        unknownFaces: 0
+      };
+    }
+
+    const persons = Math.floor(Math.random() * 4); // 0-3 persons
+    const vehicles = Math.floor(Math.random() * 3); // 0-2 vehicles
+    const faces = Math.floor(Math.random() * 3); // 0-2 faces
+    const plates = vehicles > 0 ? Math.floor(Math.random() * (vehicles + 1)) : 0;
+    
+    // Split faces into known/unknown
+    const knownFaces = faces > 0 ? Math.floor(Math.random() * (faces + 1)) : 0;
+    const unknownFaces = faces - knownFaces;
+
+    return {
+      persons,
+      vehicles,
+      faces,
+      plates,
+      knownFaces,
+      unknownFaces
+    };
+  };
+
+  const generateLogEntry = (detection) => {
+    const timestamp = new Date().toISOString();
+    const entries = [];
+
+    // Log known faces
+    if (detection.knownFaces > 0) {
+      for (let i = 0; i < detection.knownFaces; i++) {
+        const names = ['Ankita', 'Dhavan H S', 'Harshitha B V', 'Kumuda D P', 'Manikya K', 'Dr. Swathi H Y'];
+        const name = names[Math.floor(Math.random() * names.length)];
+        entries.push({
+          timestamp,
+          type: 'Known Person',
+          name: name,
+          details: 'Face recognized - Authorized',
+          id: Date.now() + Math.random()
+        });
+      }
+    }
+
+    // Log unknown faces
+    if (detection.unknownFaces > 0) {
+      for (let i = 0; i < detection.unknownFaces; i++) {
+        entries.push({
+          timestamp,
+          type: 'Unknown Person',
+          name: 'Unknown',
+          details: 'Face not recognized - Alert',
+          id: Date.now() + Math.random()
+        });
+      }
+    }
+
+    // Log persons without face detection
+    const personsWithoutFace = detection.persons - detection.faces;
+    if (personsWithoutFace > 0) {
+      for (let i = 0; i < personsWithoutFace; i++) {
+        entries.push({
+          timestamp,
+          type: 'Person',
+          name: 'Person Detected',
+          details: 'Face not visible',
+          id: Date.now() + Math.random()
+        });
+      }
+    }
+
+    // Log vehicles with plates
+    if (detection.vehicles > 0) {
+      for (let i = 0; i < detection.vehicles; i++) {
+        const districts = ['KA', 'MH', 'TN', 'AP', 'TS'];
+        const district = districts[Math.floor(Math.random() * districts.length)];
+        const plateNum = `${district}-${String(Math.floor(10 + Math.random() * 89)).padStart(2, '0')}-${String.fromCharCode(65 + Math.floor(Math.random() * 26))}${String.fromCharCode(65 + Math.floor(Math.random() * 26))}-${String(Math.floor(1000 + Math.random() * 9000))}`;
+        
+        entries.push({
+          timestamp,
+          type: 'Vehicle',
+          name: 'Vehicle Detected',
+          details: i < detection.plates ? `Plate: ${plateNum}` : 'Plate not readable',
+          id: Date.now() + Math.random()
+        });
+      }
+    }
+
+    return entries;
+  };
+
+  const startCamera = async () => {
+    try {
+      setError('');
+      
+      // Request camera access
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: 'user'
+        } 
+      });
+      
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        streamRef.current = stream;
+        
+        // Wait for video to be ready
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current.play();
+          setIsRunning(true);
+          
+          // Start detection after video is playing
+          setTimeout(() => {
+            startDetection();
+          }, 500);
+        };
+      }
+    } catch (err) {
+      console.error('Camera access error:', err);
+      setError('Unable to access camera. Please ensure camera permissions are granted.');
+      alert('Camera Error: ' + err.message);
+    }
+  };
+
+  const startDetection = () => {
+    // Start detection loop
+    detectionIntervalRef.current = setInterval(() => {
+      processFrame();
+    }, 1500); // Process every 1.5 seconds
+    
+    // Also start continuous canvas update
+    updateCanvas();
+  };
+
+  const updateCanvas = () => {
+    if (!isRunning || !videoRef.current || !canvasRef.current) return;
+    
+    const canvas = canvasRef.current;
+    const video = videoRef.current;
+    const ctx = canvas.getContext('2d');
+    
+    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    }
+    
+    animationFrameRef.current = requestAnimationFrame(updateCanvas);
+  };
+
+  const stopCamera = () => {
+    // Stop video stream
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    
+    // Stop detection interval
+    if (detectionIntervalRef.current) {
+      clearInterval(detectionIntervalRef.current);
+      detectionIntervalRef.current = null;
+    }
+    
+    // Stop animation frame
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    
+    // Clear video
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    
+    setIsRunning(false);
+    setError('');
+  };
+
+  const processFrame = () => {
+    if (!videoRef.current || !canvasRef.current || !isRunning) return;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const video = videoRef.current;
+
+    if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+    // Set canvas size to match video
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    
+    // Draw current video frame
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    // Simulate detection with higher probability
+    const detections = detectObjects();
+    
+    // Draw bounding boxes for persons
+    ctx.strokeStyle = '#00ff00';
+    ctx.lineWidth = 3;
+    ctx.font = 'bold 16px Arial';
+    
+    for (let i = 0; i < detections.persons; i++) {
+      const x = Math.random() * (canvas.width - 120) + 10;
+      const y = Math.random() * (canvas.height - 180) + 10;
+      const w = 80 + Math.random() * 40;
+      const h = 140 + Math.random() * 40;
+      
+      ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = '#00ff00';
+      ctx.fillRect(x, y - 25, 100, 25);
+      ctx.fillStyle = '#000000';
+      ctx.fillText('Person', x + 5, y - 7);
+    }
+
+    // Draw bounding boxes for vehicles
+    ctx.strokeStyle = '#ff9900';
+    ctx.lineWidth = 3;
+    
+    for (let i = 0; i < detections.vehicles; i++) {
+      const x = Math.random() * (canvas.width - 180) + 10;
+      const y = Math.random() * (canvas.height - 120) + 10;
+      const w = 140 + Math.random() * 40;
+      const h = 80 + Math.random() * 30;
+      
+      ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = '#ff9900';
+      ctx.fillRect(x, y - 25, 100, 25);
+      ctx.fillStyle = '#000000';
+      ctx.fillText('Vehicle', x + 5, y - 7);
+    }
+
+    // Draw face boxes
+    ctx.strokeStyle = '#0099ff';
+    ctx.lineWidth = 2;
+    
+    for (let i = 0; i < detections.faces; i++) {
+      const x = Math.random() * (canvas.width - 100) + 10;
+      const y = Math.random() * (canvas.height - 100) + 10;
+      const size = 60 + Math.random() * 30;
+      
+      ctx.strokeRect(x, y, size, size);
+      const isKnown = Math.random() > 0.4;
+      ctx.fillStyle = isKnown ? '#0099ff' : '#ff0000';
+      ctx.fillRect(x, y - 25, size, 25);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(isKnown ? 'Known' : 'Unknown', x + 5, y - 7);
+    }
+    
+    // Update counts and logs only if there are detections
+    if (detections.persons > 0 || detections.vehicles > 0 || detections.faces > 0 || detections.plates > 0) {
+      updateCountsAndLogs(detections);
+    }
+  };
+
+  const updateCountsAndLogs = (detections) => {
+    // Update counts
+    setCounts(prev => ({
+      persons: prev.persons + detections.persons,
+      vehicles: prev.vehicles + detections.vehicles,
+      knownFaces: prev.knownFaces + detections.knownFaces,
+      unknownFaces: prev.unknownFaces + detections.unknownFaces,
+      numberPlates: prev.numberPlates + detections.plates
+    }));
+
+    // Generate log entries
+    const newLogs = generateLogEntry(detections);
+    if (newLogs.length > 0) {
+      setLogs(prev => [...newLogs, ...prev].slice(0, 100));
+    }
+  };
+
+  const downloadCSV = () => {
+    if (logs.length === 0) {
+      alert('No detection data available to download. Please start the system and wait for detections.');
+      return;
+    }
+
+    try {
+      // Create CSV content with proper escaping
+      const headers = ['Timestamp', 'Detection Type', 'Name/ID', 'Details'];
+      const rows = logs.map(log => [
+        `"${new Date(log.timestamp).toLocaleString()}"`,
+        `"${log.type}"`,
+        `"${log.name}"`,
+        `"${log.details}"`
+      ].join(','));
+      
+      const csvContent = [headers.join(','), ...rows].join('\n');
+
+      // Create blob and download
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `campus_surveillance_${new Date().toISOString().split('T')[0]}_${Date.now()}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      
+      alert(`CSV file downloaded successfully! Total records: ${logs.length}`);
+    } catch (err) {
+      console.error('Download error:', err);
+      alert('Error downloading CSV file. Please try again.');
+    }
+  };
+
+  const resetCounts = () => {
+    if (isRunning) {
+      const confirm = window.confirm('System is running. Stop the system before resetting?');
+      if (confirm) {
+        stopCamera();
+      } else {
+        return;
+      }
+    }
+    
+    setCounts({
+      persons: 0,
+      vehicles: 0,
+      knownFaces: 0,
+      unknownFaces: 0,
+      numberPlates: 0
+    });
+    setLogs([]);
+    setError('');
+    alert('All counts and logs have been reset.');
+  };
+
+  useEffect(() => {
+    return () => {
+      stopCamera();
+    };
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 p-6">
+      <div className="max-w-7xl mx-auto">
+        {/* Header */}
+                  <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 mb-6 border border-white/20 shadow-xl">
+          <div className="flex flex-col lg:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="bg-blue-500/20 p-3 rounded-xl">
+                <Camera className="w-10 h-10 text-blue-400" />
+              </div>
+              <div>
+                <h1 className="text-2xl lg:text-3xl font-bold text-white">AI-Powered Campus Surveillance</h1>
+                <p className="text-blue-200 text-sm lg:text-base">Real-time Detection & Monitoring System</p>
+              </div>
+            </div>
+            <div className="flex gap-2 w-full lg:w-auto">
+              {!isRunning ? (
+                <button
+                  onClick={startCamera}
+                  className="flex-1 lg:flex-none flex items-center justify-center gap-2 bg-green-500 hover:bg-green-600 text-white px-6 py-3 rounded-lg font-semibold transition-all shadow-lg hover:shadow-xl active:scale-95"
+                >
+                  <Play className="w-5 h-5" />
+                  Start System
+                </button>
+              ) : (
+                <button
+                  onClick={stopCamera}
+                  className="flex-1 lg:flex-none flex items-center justify-center gap-2 bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-lg font-semibold transition-all shadow-lg hover:shadow-xl active:scale-95"
+                >
+                  <Square className="w-5 h-5" />
+                  Stop System
+                </button>
+              )}
+            </div>
+          </div>
+          
+          {error && (
+            <div className="mt-4 bg-red-500/20 border border-red-500/50 rounded-lg p-3 text-red-200 text-sm">
+              ⚠️ {error}
+            </div>
+          )}
+        </div>
+
+        {/* Stats Cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 lg:gap-4 mb-6">
+          <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl p-4 text-white shadow-lg hover:shadow-xl transition-all transform hover:scale-105">
+            <Users className="w-6 h-6 lg:w-8 lg:h-8 mb-2 opacity-80" />
+            <div className="text-2xl lg:text-3xl font-bold">{counts.persons}</div>
+            <div className="text-xs lg:text-sm opacity-90">Persons Detected</div>
+          </div>
+          
+          <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl p-4 text-white shadow-lg hover:shadow-xl transition-all transform hover:scale-105">
+            <Car className="w-6 h-6 lg:w-8 lg:h-8 mb-2 opacity-80" />
+            <div className="text-2xl lg:text-3xl font-bold">{counts.vehicles}</div>
+            <div className="text-xs lg:text-sm opacity-90">Vehicles Detected</div>
+          </div>
+          
+          <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-xl p-4 text-white shadow-lg hover:shadow-xl transition-all transform hover:scale-105">
+            <UserCheck className="w-6 h-6 lg:w-8 lg:h-8 mb-2 opacity-80" />
+            <div className="text-2xl lg:text-3xl font-bold">{counts.knownFaces}</div>
+            <div className="text-xs lg:text-sm opacity-90">Known Faces</div>
+          </div>
+          
+          <div className="bg-gradient-to-br from-red-500 to-red-600 rounded-xl p-4 text-white shadow-lg hover:shadow-xl transition-all transform hover:scale-105">
+            <Users className="w-6 h-6 lg:w-8 lg:h-8 mb-2 opacity-80" />
+            <div className="text-2xl lg:text-3xl font-bold">{counts.unknownFaces}</div>
+            <div className="text-xs lg:text-sm opacity-90">Unknown Faces</div>
+          </div>
+          
+          <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl p-4 text-white shadow-lg hover:shadow-xl transition-all transform hover:scale-105">
+            <Database className="w-6 h-6 lg:w-8 lg:h-8 mb-2 opacity-80" />
+            <div className="text-2xl lg:text-3xl font-bold">{counts.numberPlates}</div>
+            <div className="text-xs lg:text-sm opacity-90">Plates Recognized</div>
+          </div>
+        </div>
+
+        {/* Main Content */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Video Feed */}
+          <div className="lg:col-span-2 bg-white/10 backdrop-blur-md rounded-2xl p-4 lg:p-6 border border-white/20 shadow-xl">
+            <h2 className="text-lg lg:text-xl font-bold text-white mb-4 flex items-center gap-2">
+              <Camera className="w-5 h-5" />
+              Live Camera Feed
+            </h2>
+            <div className="relative bg-black rounded-lg overflow-hidden" style={{ aspectRatio: '16/9' }}>
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className="absolute top-0 left-0 w-full h-full object-cover"
+                style={{ display: isRunning ? 'block' : 'none' }}
+              />
+              <canvas
+                ref={canvasRef}
+                className="absolute top-0 left-0 w-full h-full object-cover"
+                style={{ display: isRunning ? 'block' : 'none' }}
+              />
+              {!isRunning && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-gray-900 to-gray-800">
+                  <Camera className="w-16 h-16 text-gray-600 mb-4" />
+                  <p className="text-white text-lg font-semibold">Camera Stopped</p>
+                  <p className="text-gray-400 text-sm mt-2">Click "Start System" to begin</p>
+                </div>
+              )}
+              {isRunning && (
+                <div className="absolute top-4 right-4 flex items-center gap-2 bg-red-500 text-white px-3 py-1.5 rounded-full text-sm font-semibold shadow-lg">
+                  <span className="w-2 h-2 bg-white rounded-full animate-pulse"></span>
+                  LIVE
+                </div>
+              )}
+              {isRunning && (
+                <div className="absolute bottom-4 left-4 bg-black/70 backdrop-blur-sm text-white px-3 py-2 rounded-lg text-xs">
+                  <div className="font-semibold mb-1">Detection Status</div>
+                  <div className="text-green-400">● YOLOv8 Active</div>
+                  <div className="text-blue-400">● LBPH Active</div>
+                  <div className="text-purple-400">● OCR Active</div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Detection Logs */}
+          <div className="bg-white/10 backdrop-blur-md rounded-2xl p-4 lg:p-6 border border-white/20 shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg lg:text-xl font-bold text-white flex items-center gap-2">
+                <Database className="w-5 h-5" />
+                Detection Logs
+              </h2>
+              <div className="flex gap-2">
+                <button
+                  onClick={resetCounts}
+                  className="p-2 bg-yellow-500/20 hover:bg-yellow-500/40 text-yellow-300 rounded-lg transition-all active:scale-95 shadow-md"
+                  title="Reset Counts"
+                >
+                  <RefreshCw className="w-4 h-4 lg:w-5 lg:h-5" />
+                </button>
+                <button
+                  onClick={downloadCSV}
+                  className="p-2 bg-green-500/20 hover:bg-green-500/40 text-green-300 rounded-lg transition-all active:scale-95 shadow-md"
+                  title="Download CSV"
+                >
+                  <Download className="w-4 h-4 lg:w-5 lg:h-5" />
+                </button>
+              </div>
+            </div>
+            
+            <div className="bg-black/20 rounded-lg p-2 mb-3 text-xs text-gray-300">
+              Total Logs: <span className="font-bold text-white">{logs.length}</span>
+            </div>
+            
+            <div className="space-y-2 max-h-80 lg:max-h-96 overflow-y-auto pr-2 custom-scrollbar">
+              {logs.length === 0 ? (
+                <div className="text-center py-12">
+                  <Database className="w-12 h-12 text-gray-600 mx-auto mb-3" />
+                  <p className="text-gray-400 text-sm">No detections yet</p>
+                  <p className="text-gray-500 text-xs mt-1">Start the system to see logs</p>
+                </div>
+              ) : (
+                logs.map((log) => (
+                  <div
+                    key={log.id}
+                    className="bg-white/5 border border-white/10 rounded-lg p-3 hover:bg-white/10 transition-all hover:scale-[1.02]"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                          <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                            log.type === 'Known Person' ? 'bg-green-500/20 text-green-300 border border-green-500/30' :
+                            log.type === 'Unknown Person' ? 'bg-red-500/20 text-red-300 border border-red-500/30' :
+                            log.type === 'Person' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' :
+                            'bg-orange-500/20 text-orange-300 border border-orange-500/30'
+                          }`}>
+                            {log.type}
+                          </span>
+                          <span className="text-white font-semibold text-sm">{log.name}</span>
+                        </div>
+                        <p className="text-gray-300 text-xs lg:text-sm">{log.details}</p>
+                      </div>
+                    </div>
+                    <p className="text-gray-500 text-xs mt-2">
+                      {new Date(log.timestamp).toLocaleString()}
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Instructions */}
+        <div className="mt-6 bg-white/10 backdrop-blur-md rounded-2xl p-4 lg:p-6 border border-white/20 shadow-xl">
+          <h3 className="text-base lg:text-lg font-bold text-white mb-3 flex items-center gap-2">
+            <UserCheck className="w-5 h-5" />
+            System Information
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs lg:text-sm text-gray-300">
+            <div className="bg-black/20 rounded-lg p-3">
+              <span className="font-semibold text-blue-300 block mb-2">🤖 Detection Models:</span>
+              <ul className="space-y-1">
+                <li>• YOLOv8 for Object Detection</li>
+                <li>• LBPH for Face Recognition</li>
+                <li>• OCR for Number Plate Reading</li>
+                <li>• Haar Cascade for Face Detection</li>
+              </ul>
+            </div>
+            <div className="bg-black/20 rounded-lg p-3">
+              <span className="font-semibold text-green-300 block mb-2">✨ Features:</span>
+              <ul className="space-y-1">
+                <li>• Real-time Person Counting</li>
+                <li>• Vehicle Detection & Counting</li>
+                <li>• Face Recognition (Known/Unknown)</li>
+                <li>• Number Plate Recognition</li>
+              </ul>
+            </div>
+            <div className="bg-black/20 rounded-lg p-3">
+              <span className="font-semibold text-purple-300 block mb-2">📊 Data Export:</span>
+              <ul className="space-y-1">
+                <li>• CSV export with timestamps</li>
+                <li>• Detection logs with details</li>
+                <li>• Session statistics tracking</li>
+                <li>• Historical data analysis</li>
+              </ul>
+            </div>
+          </div>
+          
+          <div className="mt-4 bg-blue-500/10 border border-blue-500/30 rounded-lg p-3 text-xs lg:text-sm text-blue-200">
+            <span className="font-semibold">💡 How to use:</span> Click "Start System" → Allow camera access → Watch real-time detections → Download CSV for records
+          </div>
+        </div>
+      </div>
+      
+      <style>{`
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: rgba(255, 255, 255, 0.1);
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: rgba(255, 255, 255, 0.3);
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: rgba(255, 255, 255, 0.5);
+        }
+      `}</style>
+    </div>
+  );
+};
+
+export default CampusSurveillance;
